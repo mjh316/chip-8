@@ -7,6 +7,7 @@ use minifb::{Key, Window, WindowOptions};
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
+const SCALING_FACTOR: usize = 16;
 
 const FONT_START: usize = 0x50;
 // chip8 programs should beloaded starting at 0x200 (512)
@@ -35,7 +36,7 @@ fn fourth_nibble(num: u16) -> u16 {
 
 #[inline(always)]
 fn screen_coords(x: u16, y: u16) -> usize {
-    ((y as usize) * (WIDTH) + (x as usize)) % 2048
+    ((y as usize) * (WIDTH) + (x as usize)) & (2047)
 }
 
 fn main() {
@@ -45,6 +46,7 @@ fn main() {
     let mut stack: Vec<u16> = vec![];
 
     let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
+    let mut bigBuffer: Vec<u32> = vec![0; SCALING_FACTOR * SCALING_FACTOR * (WIDTH * HEIGHT)];
     let mut registers: [u8; 16] = [0; 16];
 
     // decrement by 60 every second
@@ -66,8 +68,8 @@ fn main() {
 
     let mut window = Window::new(
         "CHIP8 - ESC to exit",
-        WIDTH,
-        HEIGHT,
+        WIDTH * SCALING_FACTOR,
+        HEIGHT * SCALING_FACTOR,
         WindowOptions::default(),
     )
     .unwrap_or_else(|e| {
@@ -140,26 +142,29 @@ fn main() {
 
                     for i in 0..n {
                         let sprite_byte = MEMORY[(index_register + i) as usize];
-                        for j in (0..8) {
+                        for j in 0..8 {
                             let curIsOn = (sprite_byte & (0x80 >> j)) != 0;
                             let screenIsOn = buffer
-                                [screen_coords(X as u16 + j as u16, Y as u16 + j as u16)]
+                                [screen_coords(X as u16 + j as u16, Y as u16 + i as u16)]
                                 == WHITE;
                             if curIsOn && screenIsOn {
                                 buffer
-                                    [screen_coords((X as u16 + j as u16), (Y as u16 + j as u16))] =
+                                    [screen_coords((X as u16 + j as u16), (Y as u16 + i as u16))] =
                                     BLACK;
                                 registers[0xF] = 1;
                             } else if curIsOn && !screenIsOn {
                                 buffer[screen_coords(X as u16 + j as u16, Y as u16 + i as u16)] =
                                     WHITE;
                             }
-                            if (X + j + 1) >= WIDTH as u8 {
-                                break;
-                            }
                         }
-                        if (Y + i as u8 + 1) >= HEIGHT as u8 {
-                            break;
+                    }
+
+                    for i in 0..(SCALING_FACTOR * HEIGHT) {
+                        for j in 0..(SCALING_FACTOR * WIDTH) {
+                            let row = i / SCALING_FACTOR;
+                            let col = j / SCALING_FACTOR;
+                            let big_index = (i * (SCALING_FACTOR * WIDTH)) + (j);
+                            bigBuffer[big_index] = buffer[screen_coords(col as u16, row as u16)];
                         }
                     }
                 }
@@ -176,7 +181,10 @@ fn main() {
             // TODO: make a beep lmao
             sound_timer -= 1;
         }
-        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+
+        window
+            .update_with_buffer(&bigBuffer, WIDTH * SCALING_FACTOR, HEIGHT * SCALING_FACTOR)
+            .unwrap();
     }
 
     println!("Hello, world!");
