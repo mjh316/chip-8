@@ -39,6 +39,25 @@ fn screen_coords(x: u16, y: u16) -> usize {
     ((y as usize) * (WIDTH) + (x as usize)) & (2047)
 }
 
+static KEYMAP: &'static [Key] = &[
+    Key::X,    // 0x0 = X
+    Key::Key1, // 1 = 1
+    Key::Key2, // 2 = 2
+    Key::Key3, // 3 = 3
+    Key::Q,    // 4 = Q
+    Key::W,    //5 = W
+    Key::E,    // 6 = E
+    Key::A,    // 7 = A
+    Key::S,    // 8 = S
+    Key::D,    // 9 = D
+    Key::Z,    // 0xA = Z
+    Key::C,    // 0xB = C
+    Key::Key4, // 0xC = 4
+    Key::R,    // 0xD = R
+    Key::F,    // 0xE = F
+    Key::V,    // 0xF = V
+];
+
 fn main() {
     let mut MEMORY: [u8; 4096] = [0; 4096];
     let mut pc = PROGRAM_START;
@@ -59,7 +78,7 @@ fn main() {
     }
 
     // LOAD PROGRAM
-    let my_buf = BufReader::new(File::open("./ibm.ch8").unwrap());
+    let my_buf = BufReader::new(File::open("./glitchGhost.ch8").unwrap());
     for (i, byte) in my_buf.bytes().enumerate() {
         let byte = byte.unwrap();
         MEMORY[i + PROGRAM_START] = byte;
@@ -112,7 +131,7 @@ fn main() {
                             assert!(!stack.is_empty());
                             pc = stack.pop().unwrap() as usize;
                         }
-                        _ => panic!("Unexpected 0 instruction: {nnn:#05x}"),
+                        _ => continue,
                     }
                     // 00EE
                 }
@@ -123,17 +142,96 @@ fn main() {
                     stack.push(pc as u16);
                     pc = nnn as usize;
                 }
-                //3 => {}
-                //4 => {}
-                //5 => {}
+                3 => {
+                    if registers[x as usize] == nn as u8 {
+                        pc += 2;
+                    }
+                }
+                4 => {
+                    if registers[x as usize] != nn as u8 {
+                        pc += 2;
+                    }
+                }
+                5 => {
+                    if registers[x as usize] == registers[y as usize] {
+                        pc += 2;
+                    }
+                }
                 6 => {
                     registers[x as usize] = nn as u8;
                 }
                 7 => {
-                    registers[x as usize] += nn as u8;
+                    registers[x as usize] = registers[x as usize].overflowing_add(nn as u8).0;
+                }
+                8 => match n {
+                    0 => registers[x as usize] = registers[y as usize],
+                    1 => registers[x as usize] |= registers[y as usize],
+                    2 => registers[x as usize] &= registers[y as usize],
+                    3 => registers[x as usize] ^= registers[y as usize],
+                    4 => {
+                        // overflows
+                        let z = registers[x as usize].checked_add(registers[y as usize]);
+                        if z.is_none() {
+                            registers[0xF] = 1;
+                        } else {
+                            registers[0xF] = 0;
+                        }
+                        registers[x as usize] = registers[y as usize].overflowing_add(nn as u8).0;
+                    }
+                    5 => {
+                        let z = registers[x as usize].checked_sub(registers[y as usize]);
+                        if z.is_none() {
+                            registers[0xF] = 0;
+                        } else {
+                            registers[0xF] = 1;
+                        }
+
+                        // registers[x as usize] -= registers[y as usize];
+                        registers[x as usize] = registers[x as usize]
+                            .overflowing_sub(registers[y as usize])
+                            .0;
+                    }
+                    6 => {
+                        // ORIGINAL BEHAVIOR
+                        // registers[x as usize] = registers[y as usize];
+                        registers[0xF] = registers[x as usize] & 1;
+                        registers[x as usize] >>= 1;
+                    }
+                    7 => {
+                        let z = registers[y as usize].checked_sub(registers[x as usize]);
+                        if z.is_none() {
+                            registers[0xF] = 0;
+                        } else {
+                            registers[0xF] = 1;
+                        }
+                        registers[y as usize] = registers[y as usize]
+                            .overflowing_sub(registers[x as usize])
+                            .0;
+
+                        // registers[y as usize] -= registers[x as usize];
+                    }
+                    0xE => {
+                        // ORIGINAL BEHAVIOR
+                        // registers[x as usize] = registers[y as usize];
+                        registers[0xF] = (registers[x as usize] >> 7) & 1;
+                        registers[x as usize] <<= 1;
+                    }
+                    _ => continue, // _ => panic!("Unexpected 8 instruction: {n:#06x}"),
+                },
+                9 => {
+                    if registers[x as usize] != registers[y as usize] {
+                        pc += 2;
+                    }
                 }
                 0xA => {
                     index_register = nnn;
+                }
+                0xB => {
+                    // ORIGINAL BEHAVIOR
+                    pc = (nnn + registers[0] as u16) as usize;
+                }
+                0xC => {
+                    registers[x as usize] = (rand::random::<u16>() & nn) as u8;
                 }
                 0xD => {
                     let mut X = registers[x as usize] & 63;
@@ -168,9 +266,72 @@ fn main() {
                         }
                     }
                 }
+                0xE => match nn {
+                    0x9E => {
+                        if window.is_key_down(KEYMAP[registers[x as usize] as usize]) {
+                            pc += 2;
+                        }
+                    }
+                    0xA1 => {
+                        if !window.is_key_down(KEYMAP[registers[x as usize] as usize]) {
+                            pc += 2;
+                        }
+                    }
+                    _ => panic!("Bad E instruction: {nn:#06x}"),
+                },
+                0xF => match nn {
+                    0x07 => registers[x as usize] = delay_timer,
+                    0x15 => delay_timer = registers[x as usize],
+                    0x18 => sound_timer = registers[x as usize],
+                    0x1E => {
+                        index_register += registers[x as usize] as u16;
+                        if index_register >= 0x1000 {
+                            registers[0xF] = 1;
+                        }
+                    }
+                    0x0A => {
+                        let keys = window.get_keys();
+                        if keys.is_empty() {
+                            pc -= 2;
+                        } else {
+                            for i in 0..KEYMAP.len() {
+                                if keys.contains(&KEYMAP[i]) {
+                                    registers[x as usize] = i as u8;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    0x29 => {
+                        index_register =
+                            registers[x as usize] as u16 * 5 as u16 + FONT_START as u16;
+                    }
+                    0x33 => {
+                        let first_digit = (registers[x as usize] / 100) % 10;
+                        let second_digit = (registers[x as usize] / 10) % 10;
+                        let third_digit = registers[x as usize] % 10;
+                        MEMORY[index_register as usize] = first_digit;
+                        MEMORY[index_register as usize + 1] = second_digit;
+                        MEMORY[index_register as usize + 2] = third_digit;
+                    }
+                    0x55 => {
+                        // modern behavior
+                        // println!("registers[x]: {}", registers[x as usize]);
+                        for i in 0..(u8::min(registers[x as usize] + 1, 16)) {
+                            MEMORY[index_register as usize + i as usize] = registers[i as usize];
+                        }
+                    }
+                    0x65 => {
+                        // modern behavior
+                        for i in 0..(u8::min(registers[x as usize] + 1, 16)) {
+                            registers[i as usize] = MEMORY[index_register as usize + i as usize];
+                        }
+                    }
+                    _ => panic!("Unexpected F instruction: {nn:#06x}"),
+                },
                 _ => panic!("Unexpected instruction category: {category:#06x}"),
             }
-            // EXCUTE
+            // EXECUTE
             //
         }
 
